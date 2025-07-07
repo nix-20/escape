@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Escape Room Virtuale Avanzata</title>
+<style>
+  /* Reset e stili base */
+  body, html {
+    margin:0; padding:0; height:100%; background:#111; color:#eee; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    overflow: hidden;
+  }
+  #gameCanvas {
+    display: block;
+    margin: 0 auto;
+    background: #222;
+    border: 3px solid #555;
+    border-radius: 10px;
+    box-shadow: 0 0 20px #0066ccaa inset;
+  }
+  #ui {
+    position: fixed;
+    bottom: 10px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.7);
+    padding: 10px 15px;
+    border-radius: 12px;
+    display: flex;
+    gap: 15px;
+    user-select: none;
+    align-items: center;
+    max-width: 900px;
+    width: 90%;
+  }
+  #inventory {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .item {
+    width: 48px; height: 48px;
+    border: 2px solid #555;
+    border-radius: 8px;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    cursor: pointer;
+    filter: grayscale(80%);
+    transition: filter 0.3s, border-color 0.3s;
+    box-shadow: 0 0 4px transparent;
+  }
+  .item.selected {
+    border-color: #6cf;
+    filter: none;
+    box-shadow: 0 0 8px #6cf;
+  }
+  #message {
+    position: fixed;
+    top: 10px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.9);
+    color: #6cf;
+    font-size: 1.2em;
+    padding: 8px 16px;
+    border-radius: 8px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.5s;
+    max-width: 80%;
+    text-align: center;
+  }
+  #timerScore {
+    position: fixed;
+    top: 10px; right: 10px;
+    font-size: 1.1em;
+    background: rgba(0,0,0,0.7);
+    padding: 6px 12px;
+    border-radius: 8px;
+    user-select: none;
+    box-shadow: 0 0 10px #3399ff99;
+  }
+  button {
+    background: #336699;
+    color: #eee;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background 0.3s;
+  }
+  button:hover {
+    background: #5599ee;
+  }
+  #overlay {
+    position: fixed;
+    top:0; left:0; width:100%; height:100%;
+    background: rgba(0,0,0,0.95);
+    color: #6cf;
+    font-size: 1.6em;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 10000;
+    user-select: none;
+    padding: 20px;
+    text-align: center;
+  }
+  #overlay.hidden {
+    display: none;
+  }
+  #codeInputContainer {
+    margin-top: 20px;
+  }
+  #codeInput {
+    font-size: 1.3em;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 2px solid #6cf;
+    width: 160px;
+    text-align: center;
+    letter-spacing: 8px;
+    background: #222;
+    color: #6cf;
+  }
+  #hintText {
+    margin-top: 12px;
+    font-size: 1em;
+    color: #5599ee;
+  }
+  /* Animazione luce torcia */
+  #lightEffect {
+    pointer-events: none;
+    position: absolute;
+    border-radius: 50%;
+    box-shadow: 0 0 150px 100px rgba(204,204,255,0.6);
+    width: 300px;
+    height: 300px;
+    mix-blend-mode: screen;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="900" height="600"></canvas>
+
+<div id="ui">
+  <div id="inventory" title="Inventario"></div>
+  <button id="btnRestart" title="Restart Game">🔄 Ricomincia</button>
+</div>
+
+<div id="message"></div>
+<div id="timerScore">Tempo: 00:00 | Punti: 0 | Livello: 1</div>
+
+<div id="overlay">
+  <h1>Escape Room Virtuale</h1>
+  <p>Benvenuto! Risolvi i puzzle per scappare dalla stanza.</p>
+  <p>Usa il mouse per interagire, raccogliere e combinare oggetti.</p>
+  <button id="btnStart">Inizia Gioco</button>
+</div>
+
+<div id="lightEffect"></div>
+
+<script>
+(() => {
+  // Canvas setup
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // UI elements
+  const messageEl = document.getElementById('message');
+  const inventoryEl = document.getElementById('inventory');
+  const timerScoreEl = document.getElementById('timerScore');
+  const overlay = document.getElementById('overlay');
+  const btnStart = document.getElementById('btnStart');
+  const btnRestart = document.getElementById('btnRestart');
+  const lightEffect = document.getElementById('lightEffect');
+
+  // Stato gioco
+  let gameStarted = false;
+  let level = 1;
+  let maxLevel = 2;
+  let inventory = [];
+  let selectedItem = null;
+  let score = 0;
+  let timeStart, elapsedTime = 0;
+  let timerInterval = null;
+
+  // Stato luce torcia (per animazione)
+  let torchOn = false;
+  let torchPos = {x: 0, y: 0};
+
+  // Oggetti definiti per livelli (posizioni, stati, etc)
+  // Oggetti sono clonati ad ogni livello
+  const levelsData = [
+    {
+      name: "Stanza 1",
+      objects: [
+        {
+          id: 'key',
+          name: 'Chiave dorata',
+          x: 120, y: 460, width: 48, height: 20,
+          imgSrc: 'https://cdn-icons-png.flaticon.com/512/483/483947.png',
+          collected: false,
+          description: 'Una chiave dorata. Potrebbe aprire qualcosa.',
+        },
+        {
+          id: 'drawer',
+          name: 'Cassetto',
+          x: 700, y: 410, width: 120, height: 80,
+          imgSrc: 'https://cdn-icons-png.flaticon.com/512/2948/2948021.png',
+          opened: false,
+          locked: true,
+          contains: 'note',
+          description: 'Un cassetto chiuso a chiave.',
+        },
+        {
+          id: 'note',
+          name: 'Nota con codice',
+          x: 0, y: 0, width: 200, height: 100,
+          imgSrc: 'https://cdn-icons-png.flaticon.com/512/1828/1828919.png',
+          collected: false,
+          description: 'Una nota con un codice: 3-7-1.',
+        },
+        {
+          id: 'door',
+          name: 'Porta di uscita',
+          x: 800, y: 150, width: 80, height: 200,
+          imgSrc: 'https://cdn-icons-png.flaticon.com/512/190/190411.png',
+          locked: true,
+          opened: false,
+          description: 'La porta di uscita, chiusa a chiave.',
+          codeVisible: false, // visibilità codice nascosto (con torcia)
+          code: '371'
+        },
+        {
+          id: 'box',
+          name: 'Scatola chiusa',
+          x: 400, y: 500, width: 100, height: 50,
+          imgSrc: 'https://cdn-icons-png.flaticon.com/512/889/889561.png',
+          opened: false,
+          contains: 'flashlight',
+          description: 'Una scatola chiusa, chissà cosa c\'è dentro.',
+        },
+        {
+          id: 'flashlight',
+          name: 'Torcia',
+          x: 0, y: 0, width: 50, height: 20,
+          imgSrc: 'https://cdn-icons-png.flaticon.com/512/1946/1946429.png',
+          collected: false,
+          description: 'Una torcia, potrebbe aiutarti a vedere cose nascoste.',
+          onUse: function() {
+            torchOn = !torchOn;
+            if(torchOn) {
+              showMessage('Torcia accesa. Muovi il mouse per illuminare.');
+              lightEffect.style.opacity = '1';
+            } else {
+              showMessage('Torcia spenta.');
+              lightEffect.style.opacity = '0';
+            }
+          }
+        }
+      ],
+      puzzles: [
+        // Puzzle: cassetto si sblocca con chiave
+        {
+          type: 'unlock',
+          targetId: 'drawer',
+          requiredItemId: 'key',
+          onSolve: () => {
+            getObjectById('drawer').locked = false;
+            getObjectById('drawer').opened = true;
+            showMessage('Hai sbloccato e aperto il cassetto!');
+            addToInventory(getObjectById('note'));
+          }
+        },
+        // Puzzle: aprire porta con codice 371
+        {
+          type: 'code',
+          targetId: 'door',
+          code: '371',
+          onSolve: () => {
+            getObjectById('door').locked = false;
+            getObjectById('door').opened = true;
+            showMessage('Hai aperto la porta! Passa al livello successivo.');
+            setTimeout(() => {
+              nextLevel();
+            }, 2000);
+          }
+        }
+      ]
+    },
+    {
+      name: "Stanza 2",
+      objects: [
+        {
+          id: 'key2',
+          name: 'Chiave Rugginosa',
+          x: 150, y: 500, width: 40, height: 25,
+          imgSrc: 'https://cdn-icons-png.flaticon.com/512/159/159647.png',
+          collected: false,
+          description: 'Una chiave vecchia e rugginosa.',
+        },
+        {
+          id: 'safe',
+          name: 'Cassaforte',
+          x: 700, y: 350, width: 120, height: 120,
+          imgSrc: 'https://cdn-icons-png.flaticon.com/512/564/564619.png',
+          opened: false,
+          locked: true,
+          code: '2468',
+          description: 'Una cassaforte con combinazione a 4 cifre.',
+          contains: 'goldbar'
+        },
+        {
+          id: 'goldbar',
+          name: 'Lingotto d\'oro',
+          x: 0, y: 0, width: 100, height: 40,
+          imgSrc: 'https://cdn-icons-png.flaticon.com/512/3103/3103446.png',
+          collected: false,
+          description: 'Un prezioso lingotto d\'oro.',
+        },
+        {
+          id: 'door2',
+          name: 'Porta di uscita stanza 2',
+          x: 810, y: 130, width: 80, height: 200,
+          imgSrc: 'https://cdn-icons-png.flaticon.com/512/190/190411.png',
+          locked: true,
+          opened: false,
+          description: 'La porta di uscita, chiusa a chiave.',
+          codeVisible: false,
+          code: '2468'
+        },
+        {
+          id: 'flashlight',
+          name: 'Torcia',
+          x: 0, y: 0, width: 50, height: 20,
+          imgSrc: 'https://cdn-icons-png.flaticon.com/512/1946/1946429.png',
+          collected: false,
+          description: 'Una torcia, potrebbe aiutarti a vedere cose nascoste.',
+          onUse: function() {
+            torchOn = !torchOn;
+            if(torchOn) {
+              showMessage('Torcia accesa. Muovi il mouse per illuminare.');
+              lightEffect.style.opacity = '1';
+            } else {
+              showMessage('Torcia spenta.');
+              lightEffect.style.opacity = '0';
+            }
+          }
+        }
+      ],
+      puzzles: [
+        {
+          type: 'unlock',
+          targetId: 'safe',
+          requiredItemId: 'key2',
+          onSolve: () => {
+            getObjectById('safe').locked = false;
+            getObjectById('safe').opened = true;
+            showMessage('Hai sbloccato la cassaforte!');
+            addToInventory(getObjectById('goldbar'));
+          }
+        },
+        {
+          type: 'code',
+          targetId: 'door2',
+          code: '2468',
+          onSolve: () => {
+            getObjectById('door2').locked = false;
+            getObjectById('door2').opened = true;
+            showMessage('Hai aperto la porta! Hai completato il gioco!');
+            setTimeout(() => {
+              endGame(true);
+            }, 3000);
+          }
+        }
+      ]
+    }
+  ];
+
+  // Stato oggetti attuali (clonato dal livello)
+  let objects = [];
+
+  // Funzioni di utilità
+  function cloneDeep(obj) {
+    return JSON.parse(JSON.stringify(obj));
+  }
+  function getObjectById(id) {
+    return objects.find(o => o.id === id);
+  }
+
+  // Caricamento immagini (preload)
+  function loadImage(src) {
+    return new Promise(res => {
+      const img = new Image();
+      img.src = src;
+      img.onload = () => res(img);
+      img.onerror = () => res(null);
+    });
+  }
+  let imagesCache = {};
+  async function preloadImages() {
+    const imgs = [];
+    for(const lvl of levelsData) {
+      for(const obj of lvl.objects) {
+        if(!imagesCache[obj.imgSrc]) {
+          imgs.push(loadImage(obj.imgSrc).then(img => {
+            imagesCache[obj.imgSrc] = img;
+          }));
+        }
+      }
+    }
+    await Promise.all(imgs);
+  }
+
+  // Mostra messaggio con fade in/out
+  let messageTimeout = null;
+  function showMessage(text, duration = 3000) {
+    if(messageTimeout) clearTimeout(messageTimeout);
+    messageEl.textContent = text;
+    messageEl.style.opacity = '1';
+    messageTimeout = setTimeout(() => {
+      messageEl.style.opacity = '0';
+    }, duration);
+  }
+
+  // Disegna tutti gli oggetti a video
+  function drawScene() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Sfondo
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, '#222244');
+    gradient.addColorStop(1, '#111122');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Ombra leggera
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur = 10;
+
+    // Disegna oggetti (dietro)
+    for(const obj of objects) {
+      if(obj.collected) continue; // non disegno inventario
+      let img = imagesCache[obj.imgSrc];
+      if(!img) {
+        ctx.fillStyle = '#666';
+        ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+        ctx.fillStyle = '#ccc';
+        ctx.fillText(obj.name, obj.x + 4, obj.y + 20);
+      } else {
+        ctx.drawImage(img, obj.x, obj.y, obj.width, obj.height);
+      }
+
+      // Se cassetto/box aperto disegna leggermente aperto (ombra interna)
+      if(obj.opened) {
+        ctx.fillStyle = 'rgba(100,100,255,0.2)';
+        ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+      }
+
+      // Se oggetto hoverato disegna bordo luminoso
+      if(obj.hover) {
+        ctx.strokeStyle = '#66ccff';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = '#66ccff';
+        ctx.shadowBlur = 12;
+        ctx.strokeRect(obj.x - 3, obj.y - 3, obj.width + 6, obj.height + 6);
+      }
+
+      // Se porta e codice visibile (con torcia)
+      if(obj.id === 'door' || obj.id === 'door2') {
+        if(obj.codeVisible) {
+          ctx.font = '32px monospace';
+          ctx.fillStyle = '#66ccff';
+          ctx.fillText(obj.code, obj.x + 10, obj.y + obj.height / 2);
+        }
+      }
+    }
+
+    // Se torcia accesa, disegna effetto luce
+    if(torchOn) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-out';
+      const radius = 150;
+      ctx.beginPath();
+      ctx.arc(torchPos.x, torchPos.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Aggiorna inventario UI
+  function updateInventory() {
+    inventoryEl.innerHTML = '';
+    for(const item of inventory) {
+      const div = document.createElement('div');
+      div.classList.add('item');
+      div.style.backgroundImage = `url(${item.imgSrc})`;
+      div.title = item.name + (item.description ? "\n" + item.description : "");
+      if(selectedItem && selectedItem.id === item.id) {
+        div.classList.add('selected');
+      }
+      div.addEventListener('click', () => {
+        if(selectedItem && selectedItem.id === item.id) {
+          selectedItem = null;
+        } else {
+          selectedItem = item;
+        }
+        updateInventory();
+        showMessage(selectedItem ? `Selezionato: ${selectedItem.name}` : 'Nessun oggetto selezionato');
+      });
+      inventoryEl.appendChild(div);
+    }
+  }
+
+  // Aggiungi oggetto all'inventario
+  function addToInventory(obj) {
+    obj.collected = true;
+    inventory.push(obj);
+    updateInventory();
+  }
+
+  // Gestione click sugli oggetti
+  canvas.addEventListener('click', e => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    for(const obj of objects) {
+      if(obj.collected) continue;
+      if(mx >= obj.x && mx <= obj.x + obj.width && my >= obj.y && my <= obj.y + obj.height) {
+        // Interazione oggetto
+        if(obj.locked) {
+          if(selectedItem && selectedItem.id === 'key' && obj.id === 'drawer') {
+            // Unlock puzzle 1
+            solvePuzzle('unlock', obj.id);
+          } else if(selectedItem && selectedItem.id === 'key2' && obj.id === 'safe') {
+            // Unlock puzzle 2
+            solvePuzzle('unlock', obj.id);
+          } else {
+            showMessage('È chiuso a chiave.');
+          }
+          return;
+        }
+
+        if(obj.id === 'door' || obj.id === 'door2') {
+          if(obj.locked) {
+            showMessage('La porta è chiusa. Inserisci il codice.');
+            const codeInput = prompt('Inserisci il codice:');
+            if(codeInput === obj.code) {
+              solvePuzzle('code', obj.id);
+            } else {
+              showMessage('Codice errato.');
+            }
+          } else {
+            showMessage('La porta è già aperta.');
+          }
+          return;
+        }
+
+        if(obj.onUse) {
+          obj.onUse();
+          return;
+        }
+
+        if(!obj.collected) {
+          addToInventory(obj);
+          showMessage(`Hai raccolto: ${obj.name}`);
+          return;
+        }
+      }
+    }
+  });
+
+  // Hover per evidenziare oggetti
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    let anyHover = false;
+    for(const obj of objects) {
+      if(obj.collected) {
+        obj.hover = false;
+        continue;
+      }
+      if(mx >= obj.x && mx <= obj.x + obj.width && my >= obj.y && my <= obj.y + obj.height) {
+        obj.hover = true;
+        anyHover = true;
+      } else {
+        obj.hover = false;
+      }
+    }
+    canvas.style.cursor = anyHover ? 'pointer' : 'default';
+  });
+
+  // Risolvi puzzle
+  function solvePuzzle(type, targetId) {
+    const lvl = levelsData[currentLevel];
+    for(const puzzle of lvl.puzzles) {
+      if(puzzle.type === type && puzzle.targetId === targetId) {
+        puzzle.onSolve();
+      }
+    }
+  }
+
+  // Passa al livello successivo
+  function nextLevel() {
+    currentLevel++;
+    if(currentLevel >= levelsData.length) {
+      endGame(true);
+      return;
+    }
+    loadLevel(currentLevel);
+  }
+
+  // Carica un livello
+  function loadLevel(levelIndex) {
+    selectedItem = null;
+    inventory.length = 0;
+    currentLevel = levelIndex;
+    objects = cloneDeep(levelsData[levelIndex].objects);
+    torchOn = false;
+    lightEffect.style.opacity = '0';
+    updateInventory();
+    showMessage(`Livello ${levelIndex + 1}: ${levelsData[levelIndex].name}`);
+  }
+
+  // Fine gioco
+  function endGame(success) {
+    if(success) {
+      alert('Congratulazioni! Hai completato tutti i livelli!');
+    } else {
+      alert('Game Over.');
+    }
+    currentLevel = 0;
+    loadLevel(currentLevel);
+  }
+
+  // Gestione posizione torcia
+  let torchPos = {x: 0, y: 0};
+  window.addEventListener('mousemove', e => {
+    torchPos.x = e.clientX - canvas.getBoundingClientRect().left;
+    torchPos.y = e.clientY - canvas.getBoundingClientRect().top;
+  });
+
+  // Animazione ciclo di gioco
+  function gameLoop() {
+    drawScene();
+    requestAnimationFrame(gameLoop);
+  }
+
+  // Inizializzazione gioco
+  async function init() {
+    await preloadImages();
+    loadLevel(0);
+    gameLoop();
+  }
+  init();
+
+</script>
+</body>
+</html>
